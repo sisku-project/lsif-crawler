@@ -1,13 +1,12 @@
 module Main where
 
+import Crawler (loadFile, search, searchResultToJson)
 import Relude
-import Crawler (loadFile, findLabel, Index(..), printSearchResult, search)
-import Text.Pretty.Simple (pPrint)
-import Data.Graph (reachable)
-import Control.Lens (itraverse_, (^.), At (at))
+import qualified Data.Aeson as Aeson
+import Data.Aeson (Value(Array))
 
 main :: IO ()
 main = do
   [filePath] <- getArgs
   index <- loadFile filePath
-  traverse_ (printSearchResult index) (search index)
+  putLBS $ Aeson.encode $ Array $ fromList $ map (searchResultToJson index) (search index)

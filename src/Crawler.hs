@@ -1,17 +1,22 @@
-{-# LANGUAGE TupleSections #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 module Crawler where
 
-import Control.Lens (At (at), (^.), (^?))
+import Control.Lens (makeLenses, (^?))
 import Data.Aeson
 import Data.Aeson.Lens
-import Data.Graph.Inductive (Gr, lab, mkGraph, pre, suc)
+import Data.Graph.Inductive (Gr, Graph (labNodes), lab, mkGraph, pre, suc)
 import Data.Graph.Inductive.Graph (Node)
-import qualified Data.Map.Strict as Map
 import Flow ((|>))
 import Relude
 import qualified Relude.Unsafe as Unsafe
-import Text.Pretty.Simple (pPrint)
+
+newtype Index = Index
+  { _graph :: Gr Value Text
+  }
+  deriving stock (Show)
+
+makeLenses ''Index
 
 loadFile :: FilePath -> IO Index
 loadFile filePath = do
@@ -19,16 +24,9 @@ loadFile filePath = do
   let index = valuesToIndex $ mapMaybe (decode . encodeUtf8) ls
   pure index
 
-data Index = Index
-  { _graph :: Gr Value Text,
-    _vertexes :: Map Int Value
-  }
-  deriving stock (Show)
-
 valuesToIndex :: [Value] -> Index
-valuesToIndex vs = Index {_graph = graph, _vertexes = vertexes}
+valuesToIndex vs = Index {_graph = mkGraph nodes edges}
   where
-    graph = mkGraph nodes edges
     nodes =
       filter (\x -> x ^? key "type" == Just (String "vertex")) vs
         |> map (\x -> (Unsafe.fromJust $ fmap fromInteger $ x ^? key "id" . _Integer, x))
@@ -43,13 +41,6 @@ valuesToIndex vs = Index {_graph = graph, _vertexes = vertexes}
           outV :: Int = Unsafe.fromJust $ fmap fromInteger (x ^? key "outV" . _Integer)
           label = fromMaybe "noLabel" (x ^? key "label" . _String)
        in map (outV,,label) inVs
-    vertexes =
-      filter (\x -> x ^? key "type" == Just (String "vertex")) vs
-        |> map (\x -> (Unsafe.fromJust $ fmap fromInteger $ x ^? key "id" . _Integer, x))
-        |> fromList
-
-findLabel :: Index -> Text -> Map Int Value
-findLabel Index {_graph, _vertexes} label = Map.filter (\v -> v ^? key "label" == Just (String label)) _vertexes
 
 data SearchResult = SearchResult
   { hover :: Node,
@@ -60,7 +51,7 @@ data SearchResult = SearchResult
   deriving stock (Show)
 
 search :: Index -> [SearchResult]
-search Index {_graph = gr, _vertexes} = map ?? hoverResults $ \hoverResult ->
+search Index {_graph = gr} = map ?? hoverResults $ \hoverResult ->
   executingState SearchResult {hover = hoverResult, definition = 0, defRanges = [], moniker = 0} do
     traverse_ ?? pre gr hoverResult $ \p ->
       traverse_ ?? results p $ \r ->
@@ -72,7 +63,7 @@ search Index {_graph = gr, _vertexes} = map ?? hoverResults $ \hoverResult ->
             modify $ \x -> x {moniker = r}
           _ -> pure ()
   where
-    hoverResults = Map.keys $ Map.filter (\v -> v ^? key "label" == Just (String "hoverResult")) _vertexes
+    hoverResults = map fst $ filter (\(_, v) -> v ^? key "label" == Just (String "hoverResult")) $ labNodes gr
     results i = concatMap ?? suc gr i $ \next ->
       if Unsafe.fromJust (lab gr next) ^? key "label" == Just (String "resultSet")
         then suc gr next
@@ -82,12 +73,11 @@ search Index {_graph = gr, _vertexes} = map ?? hoverResults $ \hoverResult ->
       definition <- filter (\p -> Unsafe.fromJust (lab gr p) ^? key "label" == Just (String "document")) $ pre gr range
       pure (definition, range)
 
-printSearchResult :: MonadIO m => Index -> SearchResult -> m ()
-printSearchResult Index {_graph = gr} SearchResult {..} = do
-  putStrLn "=== Hover ==="
-  pPrint (lab gr hover)
-  putStrLn "=== Definition ==="
-  pPrint (lab gr definition)
-  traverse_ (bitraverse (print . lab gr) (print . lab gr)) defRanges
-  putStrLn "=== Moniker ==="
-  pPrint (lab gr moniker)
+searchResultToJson :: Index -> SearchResult -> Value
+searchResultToJson Index {_graph = gr} SearchResult {..} =
+  object
+    [ "hover" .= lab gr hover,
+      "definition" .= lab gr definition,
+      "defRanges" .= map (bimap (lab gr) (lab gr)) defRanges,
+      "moniker" .= lab gr moniker
+    ]
