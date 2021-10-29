@@ -1,0 +1,8 @@
+cradle:
+  cabal:
+    - path: "src"
+      component: "lib:lsif-crawler"
+    - path: "app"
+      component: "lsif-crawler:exe:lsif-crawler-exe"
+    - path: "test"
+      component: "lsif-crawler:test:lsif-crawler-test"
